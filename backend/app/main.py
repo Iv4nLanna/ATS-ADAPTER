@@ -1,11 +1,19 @@
-﻿from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
+﻿from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from app.core.config import settings
+from app.schemas.auth import LoginRequest, LoginResponse
 from app.schemas.resume import ExportPdfRequest, OptimizeResponse
 from app.services.ai_service import optimize_resume
 from app.services.pdf_service import generate_ats_friendly_pdf_bytes
+from app.services.security_service import (
+    enforce_rate_limit,
+    issue_session_token,
+    validate_login_credentials,
+    verify_session_token,
+    verify_turnstile_token,
+)
 from app.services.text_service import clean_text, extract_pdf_text
 
 app = FastAPI(title="ATS Optimizer API", version="1.0.0")
@@ -24,9 +32,10 @@ def health() -> dict:
     return {"status": "ok"}
 
 
-def _authorize_request(x_api_key: str | None) -> None:
-    if settings.app_api_key and x_api_key != settings.app_api_key:
-        raise HTTPException(status_code=401, detail="Unauthorized request.")
+def _client_ip(request: Request) -> str:
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
 
 
 def _validate_limits(pdf_bytes: bytes, job_description: str) -> None:
@@ -47,13 +56,103 @@ def _validate_limits(pdf_bytes: bytes, job_description: str) -> None:
         )
 
 
-@app.post("/api/optimize-cv", response_model=OptimizeResponse)
-async def optimize_cv(
-    resume_pdf: UploadFile = File(...),
-    job_description: str = Form(...),
+def _enforce_optional_app_key(x_api_key: str | None) -> None:
+    if settings.app_api_key and x_api_key != settings.app_api_key:
+        raise HTTPException(status_code=401, detail="Unauthorized request.")
+
+
+def _get_current_user(
+    request: Request,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="x-api-key"),
+) -> str:
+    _enforce_optional_app_key(x_api_key)
+
+    if not settings.auth_enabled:
+        return "public"
+
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Missing bearer token.")
+
+    token = authorization.split(" ", 1)[1].strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Invalid bearer token.")
+
+    user_id = verify_session_token(token)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Session expired or invalid token.")
+
+    return user_id
+
+
+@app.post("/api/auth/login", response_model=LoginResponse)
+def login(
+    payload: LoginRequest,
+    request: Request,
     x_api_key: str | None = Header(default=None, alias="x-api-key"),
 ):
-    _authorize_request(x_api_key)
+    _enforce_optional_app_key(x_api_key)
+
+    ip = _client_ip(request)
+    try:
+        enforce_rate_limit(
+            key=f"login:{ip}",
+            limit=settings.rate_limit_login_per_minute,
+            window_seconds=60,
+        )
+    except RuntimeError:
+        raise HTTPException(status_code=429, detail="Too many login attempts.")
+
+    try:
+        captcha_ok = verify_turnstile_token(payload.captcha_token, ip)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=f"Captcha error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Captcha verification failed: {exc}") from exc
+
+    if not captcha_ok:
+        raise HTTPException(status_code=400, detail="Invalid captcha token.")
+
+    if not validate_login_credentials(payload.username, payload.password):
+        raise HTTPException(status_code=401, detail="Invalid credentials.")
+
+    access_token = issue_session_token(user_id=payload.username)
+    expires_in_seconds = max(1, settings.auth_token_ttl_minutes) * 60
+    return LoginResponse(
+        access_token=access_token,
+        expires_in_seconds=expires_in_seconds,
+        user=payload.username,
+    )
+
+
+@app.post("/api/optimize-cv", response_model=OptimizeResponse)
+async def optimize_cv(
+    request: Request,
+    resume_pdf: UploadFile = File(...),
+    job_description: str = Form(...),
+    captcha_token: str | None = Form(default=None),
+    current_user: str = Depends(_get_current_user),
+):
+    ip = _client_ip(request)
+
+    try:
+        enforce_rate_limit(
+            key=f"optimize:{current_user}:{ip}",
+            limit=settings.rate_limit_optimize_per_minute,
+            window_seconds=60,
+        )
+    except RuntimeError:
+        raise HTTPException(status_code=429, detail="Rate limit exceeded for optimize endpoint.")
+
+    try:
+        captcha_ok = verify_turnstile_token(captcha_token, ip)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=f"Captcha error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Captcha verification failed: {exc}") from exc
+
+    if not captcha_ok:
+        raise HTTPException(status_code=400, detail="Invalid captcha token.")
 
     if resume_pdf.content_type not in {"application/pdf", "application/octet-stream"}:
         raise HTTPException(status_code=400, detail="Envie um arquivo PDF valido.")
@@ -83,10 +182,20 @@ async def optimize_cv(
 
 @app.post("/api/export-pdf")
 def export_pdf(
+    request: Request,
     payload: ExportPdfRequest,
-    x_api_key: str | None = Header(default=None, alias="x-api-key"),
+    current_user: str = Depends(_get_current_user),
 ):
-    _authorize_request(x_api_key)
+    ip = _client_ip(request)
+
+    try:
+        enforce_rate_limit(
+            key=f"export:{current_user}:{ip}",
+            limit=settings.rate_limit_export_per_minute,
+            window_seconds=60,
+        )
+    except RuntimeError:
+        raise HTTPException(status_code=429, detail="Rate limit exceeded for export endpoint.")
 
     pdf_bytes = generate_ats_friendly_pdf_bytes(payload)
     headers = {"Content-Disposition": "attachment; filename=curriculo_ats.pdf"}

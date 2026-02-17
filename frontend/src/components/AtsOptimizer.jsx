@@ -10,11 +10,11 @@ import {
 } from "lucide-react";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
-const BACKEND_API_KEY = import.meta.env.VITE_BACKEND_API_KEY || "";
+const AUTH_TOKEN_KEY = "ats_auth_token";
 
-function withApiKey(headers = {}) {
-  if (!BACKEND_API_KEY) return headers;
-  return { ...headers, "x-api-key": BACKEND_API_KEY };
+function withAuth(headers = {}, token = "") {
+  if (!token) return headers;
+  return { ...headers, Authorization: `Bearer ${token}` };
 }
 
 function toEditable(data) {
@@ -97,6 +97,11 @@ export default function AtsOptimizer() {
   const [activeTab, setActiveTab] = useState("input");
   const [toasts, setToasts] = useState([]);
   const [dragActive, setDragActive] = useState(false);
+  const [authToken, setAuthToken] = useState(() => localStorage.getItem(AUTH_TOKEN_KEY) || "");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [loginCaptchaToken, setLoginCaptchaToken] = useState("");
+  const [optimizeCaptchaToken, setOptimizeCaptchaToken] = useState("");
 
   const canSubmit = useMemo(() => pdfFile && jobDescription.trim(), [pdfFile, jobDescription]);
 
@@ -146,6 +151,53 @@ export default function AtsOptimizer() {
     fileInputRef.current?.click();
   };
 
+  async function handleLogin(event) {
+    event.preventDefault();
+    setError("");
+
+    if (!username.trim() || !password.trim()) {
+      addToast("error", "Login inválido", "Preencha usuário e senha.");
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          username: username.trim(),
+          password,
+          captcha_token: loginCaptchaToken.trim() || null,
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || "Falha no login.");
+      }
+
+      localStorage.setItem(AUTH_TOKEN_KEY, data.access_token);
+      setAuthToken(data.access_token);
+      addToast("success", "Login efetuado", "Sessão autenticada com sucesso.");
+    } catch (err) {
+      setError(err.message || "Erro de autenticação.");
+      addToast("error", "Falha no login", err.message || "Erro de autenticação.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function handleLogout() {
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+    setAuthToken("");
+    setResult(null);
+    setEditable(null);
+    addToast("warning", "Sessão encerrada", "Você saiu da sessão.");
+  }
+
   async function handleOptimize(event) {
     event.preventDefault();
     setError("");
@@ -161,17 +213,21 @@ export default function AtsOptimizer() {
     const formData = new FormData();
     formData.append("resume_pdf", pdfFile);
     formData.append("job_description", jobDescription);
+    formData.append("captcha_token", optimizeCaptchaToken.trim());
 
     try {
       setLoading(true);
       const response = await fetch(`${API_BASE_URL}/api/optimize-cv`, {
         method: "POST",
-        headers: withApiKey(),
+        headers: withAuth({}, authToken),
         body: formData,
       });
 
       const data = await response.json();
       if (!response.ok) {
+        if (response.status === 401) {
+          handleLogout();
+        }
         throw new Error(data.detail || "Falha ao otimizar o currículo.");
       }
 
@@ -230,13 +286,16 @@ export default function AtsOptimizer() {
       setLoading(true);
       const response = await fetch(`${API_BASE_URL}/api/export-pdf`, {
         method: "POST",
-        headers: withApiKey({
+        headers: withAuth({
           "Content-Type": "application/json",
-        }),
+        }, authToken),
         body: JSON.stringify(payload),
       });
 
       if (!response.ok) {
+        if (response.status === 401) {
+          handleLogout();
+        }
         const text = await response.text();
         throw new Error(text || "Falha ao exportar PDF.");
       }
@@ -279,6 +338,16 @@ export default function AtsOptimizer() {
           </div>
           <div className="header-creator">
             <span className="creator-label">by Ivan Lana</span>
+            {authToken && (
+              <button
+                type="button"
+                className="secondary"
+                onClick={handleLogout}
+                style={{ padding: "6px 10px", fontSize: "12px" }}
+              >
+                Sair
+              </button>
+            )}
             <div className="social-links">
               <a 
                 href="https://github.com/Iv4nLanna" 
@@ -315,7 +384,7 @@ export default function AtsOptimizer() {
         {/* Main Content Area */}
         <div className="content-area">
           {/* Tabs Navigation */}
-          {result && (
+          {authToken && result && (
             <div className="tabs-nav">
               <button 
                 className={`tab-button ${activeTab === "input" ? "active" : ""}`}
@@ -334,8 +403,52 @@ export default function AtsOptimizer() {
 
           {/* Tab Content */}
           <div className="tab-content">
+            {!authToken && (
+              <div className="col">
+                <h2>Autenticacao</h2>
+                <form className="form" onSubmit={handleLogin}>
+                  <div className="form-group">
+                    <label>
+                      Usuario
+                      <input
+                        type="text"
+                        value={username}
+                        onChange={(event) => setUsername(event.target.value)}
+                        placeholder="Seu usuario"
+                      />
+                    </label>
+                  </div>
+                  <div className="form-group">
+                    <label>
+                      Senha
+                      <input
+                        type="password"
+                        value={password}
+                        onChange={(event) => setPassword(event.target.value)}
+                        placeholder="Sua senha"
+                      />
+                    </label>
+                  </div>
+                  <div className="form-group">
+                    <label>
+                      Captcha Token (opcional)
+                      <input
+                        type="text"
+                        value={loginCaptchaToken}
+                        onChange={(event) => setLoginCaptchaToken(event.target.value)}
+                        placeholder="Preencha apenas se captcha estiver habilitado"
+                      />
+                    </label>
+                  </div>
+                  <button type="submit" disabled={loading}>
+                    {loading ? "Entrando..." : "Entrar"}
+                  </button>
+                </form>
+              </div>
+            )}
+
             {/* INPUT TAB - Form */}
-            {activeTab === "input" && !result && (
+            {authToken && activeTab === "input" && !result && (
               <form className="form" onSubmit={handleOptimize}>
                 <div className="form-group">
                   <label className="form-label">
@@ -405,6 +518,18 @@ export default function AtsOptimizer() {
                   </div>
                 </div>
 
+                <div className="form-group">
+                  <label>
+                    Captcha Token (opcional)
+                    <input
+                      type="text"
+                      value={optimizeCaptchaToken}
+                      onChange={(event) => setOptimizeCaptchaToken(event.target.value)}
+                      placeholder="Preencha apenas se captcha estiver habilitado"
+                    />
+                  </label>
+                </div>
+
                 <button 
                   type="submit" 
                   disabled={loading || !canSubmit}
@@ -422,7 +547,7 @@ export default function AtsOptimizer() {
             )}
 
             {/* COMPARAÇÃO - Original vs Otimizado */}
-            {activeTab === "input" && result && (
+            {authToken && activeTab === "input" && result && (
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--spacing-xl)", alignItems: "start" }}>
                 <div className="col">
                   <h2>📄 Original (PDF)</h2>
@@ -459,7 +584,7 @@ export default function AtsOptimizer() {
             )}
 
             {/* OUTPUT TAB - Edit */}
-            {activeTab === "output" && result && editable && (
+            {authToken && activeTab === "output" && result && editable && (
               <div style={{ display: "grid", gap: "var(--spacing-xl)" }}>
                 <div className="col">
                   <h2>✏️ Editar Currículo Otimizado</h2>

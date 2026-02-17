@@ -81,6 +81,9 @@ The goal is to simulate a lightweight retrieval layer without extra infrastructu
 
 - Provider keys are loaded server-side via environment variables
 - `.env` is ignored by git (`backend/.env`, `frontend/.env`)
+- Session authentication via `POST /api/auth/login` + Bearer token
+- In-memory rate limiting per IP/user (login, optimize, export)
+- Optional Cloudflare Turnstile verification
 - Optional backend request protection via `APP_API_KEY` + `x-api-key` header
 - Input limits to reduce abuse:
   - `MAX_PDF_SIZE_MB`
@@ -99,7 +102,8 @@ The goal is to simulate a lightweight retrieval layer without extra infrastructu
 
 - Keep provider keys only in `backend/.env`
 - Never place provider keys in `frontend/.env`
-- Use `APP_API_KEY` when exposing the backend publicly
+- Keep `AUTH_PASSWORD` strong and unique
+- Enable captcha when exposing to the public internet
 - Rotate keys if shared in chats/screenshots/logs
 - Keep `.env.example` with placeholders only
 
@@ -151,6 +155,15 @@ Security:
 - `APP_API_KEY=` (optional)
 - `MAX_PDF_SIZE_MB=5`
 - `MAX_JOB_DESCRIPTION_CHARS=15000`
+- `AUTH_ENABLED=true`
+- `AUTH_USERNAME=admin`
+- `AUTH_PASSWORD=change-me`
+- `AUTH_TOKEN_TTL_MINUTES=480`
+- `RATE_LIMIT_LOGIN_PER_MINUTE=10`
+- `RATE_LIMIT_OPTIMIZE_PER_MINUTE=12`
+- `RATE_LIMIT_EXPORT_PER_MINUTE=20`
+- `CAPTCHA_ENABLED=false`
+- `TURNSTILE_SECRET_KEY=`
 
 Chunking:
 
@@ -161,13 +174,21 @@ Chunking:
 ## API endpoints
 
 - `GET /api/health`
+- `POST /api/auth/login` (JSON)
+  - `username`
+  - `password`
+  - `captcha_token` (optional, required only when captcha is enabled)
 - `POST /api/optimize-cv` (multipart)
   - `resume_pdf` (PDF)
   - `job_description` (text)
+  - `captcha_token` (optional, required only when captcha is enabled)
 - `POST /api/export-pdf` (JSON)
   - `name`
   - `contact`
   - `optimized_resume`
+
+Protected endpoints require:
+- `Authorization: Bearer <access_token>`
 
 ## Expected output format
 
