@@ -1,66 +1,19 @@
-﻿import secrets
-import time
+﻿import time
 from collections import deque
-from dataclasses import dataclass
 from threading import Lock
-from typing import Deque, Dict, Optional
+from typing import Deque, Dict
 
 import httpx
 
 from app.core.config import settings
 
 
-@dataclass
-class SessionData:
-    user_id: str
-    expires_at: float
-
-
-_SESSION_STORE: Dict[str, SessionData] = {}
 _RATE_LIMIT_STORE: Dict[str, Deque[float]] = {}
 _STORE_LOCK = Lock()
 
 
 def _now() -> float:
     return time.time()
-
-
-def _cleanup_sessions(now_ts: float) -> None:
-    expired_tokens = [token for token, data in _SESSION_STORE.items() if data.expires_at <= now_ts]
-    for token in expired_tokens:
-        _SESSION_STORE.pop(token, None)
-
-
-def issue_session_token(user_id: str) -> str:
-    token = secrets.token_urlsafe(32)
-    ttl_seconds = max(1, settings.auth_token_ttl_minutes) * 60
-    expires_at = _now() + ttl_seconds
-
-    with _STORE_LOCK:
-        _SESSION_STORE[token] = SessionData(user_id=user_id, expires_at=expires_at)
-        _cleanup_sessions(_now())
-
-    return token
-
-
-def verify_session_token(token: str) -> Optional[str]:
-    with _STORE_LOCK:
-        data = _SESSION_STORE.get(token)
-        if not data:
-            return None
-
-        if data.expires_at <= _now():
-            _SESSION_STORE.pop(token, None)
-            return None
-
-        return data.user_id
-
-
-def validate_login_credentials(username: str, password: str) -> bool:
-    # Constant-time comparisons to reduce timing leak on credential checks.
-    valid_user = secrets.compare_digest(username or "", settings.auth_username or "")
-    valid_pass = secrets.compare_digest(password or "", settings.auth_password or "")
-    return valid_user and valid_pass
 
 
 def enforce_rate_limit(key: str, limit: int, window_seconds: int = 60) -> None:

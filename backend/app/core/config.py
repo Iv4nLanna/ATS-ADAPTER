@@ -27,12 +27,6 @@ class Settings(BaseSettings):
     max_pdf_size_mb: int = 5
     max_job_description_chars: int = 15000
 
-    auth_enabled: bool = True
-    auth_username: str = "admin"
-    auth_password: str = "change-me"
-    auth_token_ttl_minutes: int = 480
-
-    rate_limit_login_per_minute: int = 10
     rate_limit_optimize_per_minute: int = 12
     rate_limit_export_per_minute: int = 20
 
