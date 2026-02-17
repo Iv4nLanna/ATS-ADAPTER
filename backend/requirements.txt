@@ -1,0 +1,8 @@
+fastapi==0.116.1
+uvicorn[standard]==0.35.0
+python-multipart==0.0.20
+pypdf==5.9.0
+openai>=1.40.0,<2.0.0
+httpx>=0.28.0,<1.0.0
+fpdf2==2.8.4
+pydantic-settings==2.10.1
