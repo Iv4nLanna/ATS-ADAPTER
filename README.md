@@ -1,39 +1,107 @@
 ﻿# ATS Adapter
 
-ATS Adapter is a full-stack application that optimizes resumes for ATS (Applicant Tracking Systems) using low-cost or free LLM providers (Groq, Gemini, OpenRouter, optional OpenAI).
+ATS Adapter is a full-stack application to optimize resumes for ATS (Applicant Tracking Systems) using low-cost/free LLM providers (Groq, Gemini, OpenRouter, optional OpenAI).
 
-The platform receives a resume PDF + job description, extracts and cleans text, applies keyword-aware chunking, rewrites key sections with factual constraints, and returns editable output for final export in ATS-friendly format.
+It receives a resume PDF + job description, extracts and cleans text, applies **keyword-aware chunking**, rewrites strategic sections with factual constraints, and returns editable output for ATS-friendly PDF export.
 
 ## Why this project
 
-Recruiters and ATS platforms prioritize keyword alignment, clear structure, and objective wording. ATS Adapter helps candidates improve resume relevance without fabricating data.
+Recruiters and ATS engines prioritize keyword alignment, clear structure, and objective language. ATS Adapter increases relevance **without inventing information**.
 
 ## Core features
 
-- Resume PDF upload and text extraction
-- Job description parsing for hard skills and action verbs
-- Resume optimization focused on:
+- Resume PDF upload and extraction
+- Hard skills + action verbs extraction from job description
+- Optimization focused on:
   - `professional_summary`
   - `experience`
-- Anti-hallucination prompt constraints (truth-preserving rewrites)
-- Chunking + relevance ranking for better results on smaller/free models
-- Side-by-side original vs optimized editor in frontend
-- ATS-friendly PDF export (single-column, standard font, minimal styling)
+- Truth-preserving prompt constraints (anti-hallucination)
+- **Chunking + relevance ranking** for better quality on smaller/free models
+- Side-by-side editor (original vs optimized)
+- ATS-friendly PDF export (single column, standard font, simple layout)
 
 ## Architecture
 
-- `backend/` FastAPI API, AI orchestration, PDF/text services
-- `frontend/` React (Vite) UI for upload, editing, and export
+- `backend/` FastAPI API, AI orchestration, chunking/ranking, PDF/text services
+- `frontend/` React (Vite) UI for upload, editing and export
 
-### Optimization pipeline
+## Technical vision
 
-1. User uploads resume PDF and job description.
-2. Backend extracts and cleans resume text.
-3. AI step 1 extracts `hard_skills` and `action_verbs` from job description.
-4. Resume is chunked and ranked by relevance.
-5. Only top chunks are sent to AI step 2 for final optimization.
-6. API returns structured JSON for frontend editing.
-7. User downloads ATS-friendly PDF.
+ATS Adapter is designed as a **quality-first optimization pipeline** for constrained models.
+
+The technical strategy is:
+
+1. Keep factual safety as a hard rule (no hallucinated experience).
+2. Reduce prompt noise before generation.
+3. Use deterministic preprocessing + selective context retrieval.
+4. Preserve a stable JSON contract for frontend editing/export.
+
+This makes the system robust for low-cost providers while keeping ATS output quality consistent.
+
+## Chunking first (project differential)
+
+Chunking is a core concept in this project.
+
+Instead of sending the entire resume to a smaller model in one shot, ATS Adapter runs a 2-step pipeline:
+
+1. Extract job requirements (`hard_skills`, `action_verbs`) from the vacancy.
+2. Split resume text into chunks.
+3. Score each chunk by relevance against vacancy keywords + extracted requirements.
+4. Select only top-N chunks.
+5. Send condensed context to the final optimization step.
+
+### Chunking algorithm (high-level)
+
+1. Normalize and split resume text into paragraph blocks.
+2. Build chunks with size bounds (`min_chars`, `max_chars`).
+3. Extract vacancy requirements (`hard_skills`, `action_verbs`).
+4. Score each chunk by keyword overlap and section relevance.
+5. Keep top-N chunks (`RESUME_CHUNK_MAX_SELECTED`) plus baseline context.
+6. Generate optimized content from this reduced context.
+
+The goal is to simulate a lightweight retrieval layer without extra infrastructure.
+
+### Why this improves output quality
+
+- Reduces context noise
+- Prioritizes relevant experience blocks
+- Lowers token usage and cost
+- Improves consistency in free/smaller models
+- Reduces overflow/truncation risk
+
+### Chunking controls
+
+- `RESUME_CHUNK_MAX_CHARS=1100`
+- `RESUME_CHUNK_MIN_CHARS=260`
+- `RESUME_CHUNK_MAX_SELECTED=6`
+
+## Security (API key protection)
+
+### Current safeguards
+
+- Provider keys are loaded server-side via environment variables
+- `.env` is ignored by git (`backend/.env`, `frontend/.env`)
+- Optional backend request protection via `APP_API_KEY` + `x-api-key` header
+- Input limits to reduce abuse:
+  - `MAX_PDF_SIZE_MB`
+  - `MAX_JOB_DESCRIPTION_CHARS`
+- CORS restricted by `FRONTEND_ORIGIN`
+
+### Recommended operational practices
+
+- Never expose provider keys in frontend code
+- Rotate provider keys regularly
+- Revoke any leaked keys immediately
+- Use different keys for dev/staging/prod
+- Add reverse-proxy rate limiting in production (Nginx/Cloudflare)
+
+### Practical key safety checklist
+
+- Keep provider keys only in `backend/.env`
+- Never place provider keys in `frontend/.env`
+- Use `APP_API_KEY` when exposing the backend publicly
+- Rotate keys if shared in chats/screenshots/logs
+- Keep `.env.example` with placeholders only
 
 ## Tech stack
 
@@ -78,7 +146,13 @@ Provider selection:
 - `AI_PROVIDER=groq|gemini|openrouter|openai`
 - `AI_TIMEOUT_SECONDS=90`
 
-Chunking controls:
+Security:
+
+- `APP_API_KEY=` (optional)
+- `MAX_PDF_SIZE_MB=5`
+- `MAX_JOB_DESCRIPTION_CHARS=15000`
+
+Chunking:
 
 - `RESUME_CHUNK_MAX_CHARS=1100`
 - `RESUME_CHUNK_MIN_CHARS=260`
@@ -117,20 +191,13 @@ Chunking controls:
 }
 ```
 
-## Roadmap
-
-- Add score-based ATS gap analysis dashboard
-- Add multilingual optimization templates
-- Add provider fallback routing and retries
-- Add resume version history and comparison
-
 ## Keywords
 
-`ats`, `ats-optimizer`, `resume-optimizer`, `cv-optimizer`, `resume-parser`, `job-matching`, `keyword-optimization`, `fastapi`, `react`, `llm`, `groq`, `gemini`, `openrouter`, `prompt-engineering`, `recruitment-tech`, `career-tools`
+`ats`, `ats-optimizer`, `resume-optimizer`, `cv-optimizer`, `resume-parser`, `job-matching`, `keyword-optimization`, `resume-chunking`, `retrieval-ranking`, `fastapi`, `react`, `llm`, `groq`, `gemini`, `openrouter`, `prompt-engineering`, `recruitment-tech`, `career-tools`
 
 ## Suggested GitHub topics
 
-`ats` `resume-optimizer` `cv` `fastapi` `react` `llm` `groq` `openrouter` `gemini` `prompt-engineering`
+`ats` `resume-optimizer` `cv` `fastapi` `react` `llm` `groq` `openrouter` `gemini` `prompt-engineering` `chunking`
 
 ## License
 

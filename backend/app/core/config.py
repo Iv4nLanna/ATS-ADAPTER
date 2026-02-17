@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     resume_chunk_min_chars: int = 260
     resume_chunk_max_selected: int = 6
 
+    app_api_key: str = ""
+    max_pdf_size_mb: int = 5
+    max_job_description_chars: int = 15000
+
     frontend_origin: str = "http://localhost:5173"
 
     model_config = SettingsConfigDict(
