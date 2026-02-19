@@ -1,133 +1,25 @@
-﻿from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
 
+from app.api.routes.health import router as health_router
+from app.api.routes.resume import router as resume_router
 from app.core.config import settings
-from app.schemas.resume import ExportPdfRequest, OptimizeResponse
-from app.services.ai_service import optimize_resume
-from app.services.pdf_service import generate_ats_friendly_pdf_bytes
-from app.services.security_service import enforce_rate_limit, verify_turnstile_token
-from app.services.text_service import clean_text, extract_pdf_text
-
-app = FastAPI(title="ATS Optimizer API", version="1.0.0")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[settings.frontend_origin],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 
-@app.get("/api/health")
-def health() -> dict:
-    return {"status": "ok"}
+def create_app() -> FastAPI:
+    app = FastAPI(title="ATS Optimizer API", version="1.0.0")
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[settings.frontend_origin],
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    app.include_router(health_router)
+    app.include_router(resume_router)
+    return app
 
 
-def _client_ip(request: Request) -> str:
-    if request.client and request.client.host:
-        return request.client.host
-    return "unknown"
-
-
-def _validate_limits(pdf_bytes: bytes, job_description: str) -> None:
-    max_pdf_bytes = max(1, settings.max_pdf_size_mb) * 1024 * 1024
-    if len(pdf_bytes) > max_pdf_bytes:
-        raise HTTPException(
-            status_code=413,
-            detail=f"PDF excede o limite de {settings.max_pdf_size_mb} MB.",
-        )
-
-    if len(job_description) > max(1000, settings.max_job_description_chars):
-        raise HTTPException(
-            status_code=413,
-            detail=(
-                "Descricao da vaga excede o limite de "
-                f"{settings.max_job_description_chars} caracteres."
-            ),
-        )
-
-
-def _enforce_optional_app_key(x_api_key: str | None) -> None:
-    if settings.app_api_key and x_api_key != settings.app_api_key:
-        raise HTTPException(status_code=401, detail="Unauthorized request.")
-
-
-@app.post("/api/optimize-cv", response_model=OptimizeResponse)
-async def optimize_cv(
-    request: Request,
-    resume_pdf: UploadFile = File(...),
-    job_description: str = Form(...),
-    captcha_token: str | None = Form(default=None),
-    x_api_key: str | None = Header(default=None, alias="x-api-key"),
-):
-    _enforce_optional_app_key(x_api_key)
-
-    ip = _client_ip(request)
-    try:
-        enforce_rate_limit(
-            key=f"optimize:{ip}",
-            limit=settings.rate_limit_optimize_per_minute,
-            window_seconds=60,
-        )
-    except RuntimeError:
-        raise HTTPException(status_code=429, detail="Rate limit exceeded for optimize endpoint.")
-
-    try:
-        captcha_ok = verify_turnstile_token(captcha_token, ip)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=f"Captcha error: {exc}") from exc
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Captcha verification failed: {exc}") from exc
-
-    if not captcha_ok:
-        raise HTTPException(status_code=400, detail="Invalid captcha token.")
-
-    if resume_pdf.content_type not in {"application/pdf", "application/octet-stream"}:
-        raise HTTPException(status_code=400, detail="Envie um arquivo PDF valido.")
-
-    pdf_bytes = await resume_pdf.read()
-    if not pdf_bytes:
-        raise HTTPException(status_code=400, detail="O arquivo PDF esta vazio.")
-
-    _validate_limits(pdf_bytes=pdf_bytes, job_description=job_description)
-
-    resume_text = extract_pdf_text(pdf_bytes)
-    if not resume_text:
-        raise HTTPException(status_code=400, detail="Nao foi possivel extrair texto do PDF.")
-
-    cleaned_job_description = clean_text(job_description)
-    if not cleaned_job_description:
-        raise HTTPException(status_code=400, detail="A descricao da vaga esta vazia.")
-
-    try:
-        optimized = optimize_resume(resume_text=resume_text, job_description=cleaned_job_description)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Falha ao processar com IA: {exc}") from exc
-
-    optimized["original_resume_text"] = resume_text
-    return optimized
-
-
-@app.post("/api/export-pdf")
-def export_pdf(
-    request: Request,
-    payload: ExportPdfRequest,
-    x_api_key: str | None = Header(default=None, alias="x-api-key"),
-):
-    _enforce_optional_app_key(x_api_key)
-
-    ip = _client_ip(request)
-    try:
-        enforce_rate_limit(
-            key=f"export:{ip}",
-            limit=settings.rate_limit_export_per_minute,
-            window_seconds=60,
-        )
-    except RuntimeError:
-        raise HTTPException(status_code=429, detail="Rate limit exceeded for export endpoint.")
-
-    pdf_bytes = generate_ats_friendly_pdf_bytes(payload)
-    headers = {"Content-Disposition": "attachment; filename=curriculo_ats.pdf"}
-    return StreamingResponse(iter([pdf_bytes]), media_type="application/pdf", headers=headers)
+app = create_app()
