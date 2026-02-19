@@ -6,6 +6,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     ai_provider: Literal["groq", "gemini", "openai", "openrouter"] = "groq"
     ai_timeout_seconds: int = 90
+    ai_temperature: float = 0.15
+    ai_json_max_retries: int = 2
 
     groq_api_key: str = ""
     groq_model: str = "llama-3.1-8b-instant"
@@ -21,6 +23,7 @@ class Settings(BaseSettings):
 
     resume_chunk_max_chars: int = 1100
     resume_chunk_min_chars: int = 260
+    resume_chunk_overlap_chars: int = 180
     resume_chunk_max_selected: int = 6
 
     app_api_key: str = ""
